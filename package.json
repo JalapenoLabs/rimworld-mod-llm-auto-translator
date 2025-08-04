@@ -1,0 +1,25 @@
+{
+  "name": "rimworld-mod-llm-auto-translator",
+  "version": "1.0.0",
+  "main": "src/index.ts",
+  "license": "MIT",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "chalk": "^5.5.0",
+    "dotenv": "^17.2.1",
+    "humanize-duration": "^3.33.0",
+    "klaw": "^4.1.0",
+    "openai": "^5.7.0",
+    "tsx": "^4.20.3",
+    "typescript": "^5.9.2"
+  },
+  "devDependencies": {
+    "@jalapenolabs/cli": "git+ssh://git@github.com/jalapenolabs/cli.git",
+    "@types/humanize-duration": "^3.27.4",
+    "@types/klaw": "^3.0.7",
+    "@types/node": "^24.1.0"
+  }
+}
