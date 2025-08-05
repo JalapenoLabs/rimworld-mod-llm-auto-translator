@@ -11,11 +11,10 @@ import { Timer } from './timer'
 
 // Node.js
 import klaw from 'klaw'
-import { dirname, resolve } from 'node:path'
-import { existsSync, mkdirSync } from 'node:fs'
-import { readFile, writeFile } from 'node:fs/promises'
+import { dirname, resolve, normalize } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 
-const inputDirectory = resolve(process.cwd(), '../')
+const inputDirectory = normalize(resolve(process.cwd(), '../'))
 
 const convertLanguagePrompt = `
 You will be given a language, and a Rimworld mod xml file to translate.
@@ -62,6 +61,7 @@ You will be expected to also provide the path to the new file, and ensure that t
 <Version>/Languages/<Language>/DefInjected/<MatchedRelativePath>/<OriginalFileName>.xml
 If the source file starts with a version number, like "1.6/", you must also include that in the output path.
 If a version is not present, just start with "Languages/**"
+There may not be a MatchedRelativePath, in which case just use "DefInjected" directly.
 
 Other path examples:
 In: 1.6/Defs/ThoughtDef/PleasantFishingTrip.xml
@@ -72,6 +72,12 @@ Out: Languages/French/DefInjected/ResearchDef/ResearchProjectDef.xml
 
 In: 1.5/Defs/BuildingDef/SkyScraperDef/SkyRise.xml
 Out: 1.5/Languages/French/DefInjected/BuildingDef/SkyScraperDef/SkyRise.xml
+
+In: 1.6/Defs/ElectricityMeter.xml
+Out: 1.6/Languages/German/DefInjected/ElectricityMeter.xml
+
+# Final formatting
+Do not reformat the XML content or strip comments, just translate the user-facing strings.
 
 # Additional documentation
 https://rimworldwiki.com/wiki/Modding_Tutorials/Localization
@@ -116,17 +122,30 @@ async function main() {
 
   const openaiPromises: Promise<any>[] = []
 
-  for await (const { path } of klaw(inputDirectory)) {
+  for await (let { path } of klaw(inputDirectory)) {
+    path = normalize(path)
+
+    const isKeyedEnglishFile = path.includes(
+      normalize('/Languages/English/Keyed/')
+    )
     if (
       !path.endsWith('.xml')
       || path.endsWith('About.xml')
-      || (path.includes('/Languages/') || path.includes('\\Languages\\'))
+      // Ignore all Languages files EXCEPT for Keyed English files
+      || (path.includes(normalize('/Languages/')) && !isKeyedEnglishFile)
     ) {
       continue
     }
 
     let isFirst = true
     for (const language of supportedLanguages) {
+      if (isKeyedEnglishFile && language === 'English') {
+        console.debug(
+          chalk.magenta(`Skipping Retranslating English Keyed file: ${path}`)
+        )
+        continue
+      }
+
       if (isFirst) {
         // Do the very first request synchronously
         // So that way, the system prompt can be cached within the OpenAI API
@@ -167,15 +186,24 @@ async function main() {
 }
 
 const cachedFileContents: Record<string, string> = {}
-async function getCachedFileContents(filePath: string): Promise<string> {
+function getCachedFileContents(filePath: string): string {
   if (cachedFileContents[filePath]) {
     return cachedFileContents[filePath]
   }
 
-  const contents = await readFile(filePath, 'utf-8')
-  cachedFileContents[filePath] = contents
+  try {
+    const contents = readFileSync(filePath, 'utf-8')
+    cachedFileContents[filePath] = contents
 
-  return contents
+    return contents
+  }
+  catch (error) {
+    console.error(
+      chalk.red(`Failed to read file ${filePath}`)
+    )
+    throw error
+  }
+
 }
 
 async function convertFile(language: string, inputFilePath: string, isFirst = false) {
@@ -185,7 +213,7 @@ async function convertFile(language: string, inputFilePath: string, isFirst = fa
     ? new Timer(`First ${relativePath} to ${language}`)
     : new Timer(`${relativePath} to ${chalk.magenta(language)}`)
 
-  const contents = await getCachedFileContents(inputFilePath)
+  const contents = getCachedFileContents(inputFilePath)
 
   console.log(`Converting ${chalk.cyan(relativePath)} -> ${chalk.magenta(language)}`)
 
@@ -198,7 +226,7 @@ async function convertFile(language: string, inputFilePath: string, isFirst = fa
       },
       {
         role: 'developer',
-        content: `You will be expected to provide the output file in backticks, with the path to the new file on the first line, followed by the translated XML content`,
+        content: `You will be expected to provide the path to the new file on the first line in NO backticks, followed by the translated XML content in a fenced backtick code block.`,
       },
       {
         role: 'user',
@@ -212,7 +240,7 @@ async function convertFile(language: string, inputFilePath: string, isFirst = fa
   })
 
   totalGptTokensUsed = result.usage?.total_tokens || 0
-  const output = result.choices[0].message.content.trim()
+  let output = result.choices[0].message.content.trim()
 
   if (!output) {
     console.error(chalk.red(`Failed to translate ${relativePath} to ${language}`))
@@ -226,7 +254,7 @@ async function convertFile(language: string, inputFilePath: string, isFirst = fa
     return
   }
 
-  let [ outputPath, ...xmlContentLines ] = output.trim().split('```')
+  let [outputPath, ...xmlContentLines] = output.trim().split('```')
   outputPath = outputPath
     .trim()
     // Remove leading slash if present
@@ -254,7 +282,27 @@ async function convertFile(language: string, inputFilePath: string, isFirst = fa
     mkdirSync(outputDir, { recursive: true })
   }
 
-  await writeFile(outputFile, xmlContent, 'utf-8')
+  try {
+    writeFileSync(outputFile, xmlContent, 'utf-8')
+  }
+  catch (error) {
+    console.error(
+      chalk.red(`Failed to write file ${outputFile}: ${error.message}`),
+    )
+    console.debug({
+      outputPath,
+      outputFile,
+      outputDir,
+      output: output.slice(0, 100) + '...',
+      xmlContent: xmlContent.slice(0, 100) + '...',
+      xmlContentLength: xmlContent.length,
+      totalGptTokensUsed,
+      relativePath,
+      inputDirectory,
+      inputFilePath,
+      language,
+    })
+  }
 
   timer.stop()
 }
