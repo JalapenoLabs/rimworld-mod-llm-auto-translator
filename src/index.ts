@@ -275,6 +275,8 @@ async function convertFile(language: string, inputFilePath: string, isFirst = fa
     .replace(/^`+|`+$/g, '')
     .trim()
 
+  xmlContent += '\n' // Ensure there's a newline at the end of the XML content
+
   const outputFile = resolve(inputDirectory, outputPath)
   const outputDir = dirname(outputFile)
 
